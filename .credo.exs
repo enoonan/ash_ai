@@ -65,6 +65,7 @@
       #     {Credo.Check.Design.DuplicatedCode, false}
       #
       checks: [
+        {Credo.Check.Refactor.Apply, false},
         #
         ## Consistency Checks
         #

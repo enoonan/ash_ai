@@ -132,10 +132,13 @@ defmodule AshAi.MixProject do
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
-      {:ash, "~> 3.0"},
-      {:ash_json_api, github: "ash-project/ash_json_api"},
+      {:ash, "~> 3.5 and >= 3.5.5"},
+      {:ash_json_api, "~> 1.4 and >= 1.4.27"},
       {:open_api_spex, "~> 3.0"},
       {:langchain, "~> 0.3"},
+      {:ash_postgres, "~> 2.5", optional: true},
+      {:ash_oban, "~> 0.4.3", optional: true},
+      {:ash_phoenix, "~> 2.0", optional: true},
       {:igniter, "~> 0.5", optional: true},
       # dev/test deps
       {:ex_doc, "~> 0.37-rc", only: [:dev, :test], runtime: false},

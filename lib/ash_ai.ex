@@ -194,16 +194,6 @@ defmodule AshAi do
     |> LLMChain.add_messages(messages)
     |> setup_ash_ai(opts)
     |> LLMChain.add_callback(handler)
-    |> then(fn llm_chain ->
-      if opts.actor do
-        LLMChain.update_custom_context(llm_chain, %{
-          actor: opts.actor,
-          tenant: opts.tenant
-        })
-      else
-        llm_chain
-      end
-    end)
     |> run_loop(true)
   end
 
@@ -222,6 +212,16 @@ defmodule AshAi do
 
     lang_chain
     |> LLMChain.add_tools(tools)
+    |> then(fn llm_chain ->
+      if opts.actor do
+        LLMChain.update_custom_context(llm_chain, %{
+          actor: opts.actor,
+          tenant: opts.tenant
+        })
+      else
+        llm_chain
+      end
+    end)
   end
 
   defp run_loop(chain, first? \\ false) do
@@ -348,21 +348,105 @@ defmodule AshAi do
                 end
               end)
               |> Ash.Query.for_read(action.name, input, opts)
-              |> Ash.Actions.Read.unpaginated_read(action, load: load)
-              |> case do
-                {:ok, value} ->
-                  value
+              |> then(fn query ->
+                result_type = arguments["result_type"] || "run_query"
 
-                {:error, error} ->
-                  raise Ash.Error.to_error_class(error)
-              end
-              |> then(fn result ->
-                result
-                |> AshJsonApi.Serializer.serialize_value({:array, resource}, [], domain,
-                  load: load
-                )
-                |> Jason.encode!()
-                |> then(&{:ok, &1, result})
+                case result_type do
+                  "run_query" ->
+                    query
+                    |> Ash.Actions.Read.unpaginated_read(action, load: load)
+                    |> case do
+                      {:ok, value} ->
+                        value
+
+                      {:error, error} ->
+                        raise Ash.Error.to_error_class(error)
+                    end
+                    |> then(fn result ->
+                      result
+                      |> AshJsonApi.Serializer.serialize_value({:array, resource}, [], domain,
+                        load: load
+                      )
+                      |> Jason.encode!()
+                      |> then(&{:ok, &1, result})
+                    end)
+
+                  "count" ->
+                    query
+                    |> Ash.count()
+                    |> case do
+                      {:ok, value} ->
+                        value
+
+                      {:error, error} ->
+                        raise Ash.Error.to_error_class(error)
+                    end
+                    |> then(fn result ->
+                      result
+                      |> AshJsonApi.Serializer.serialize_value(Ash.Type.Integer, [], domain)
+                      |> Jason.encode!()
+                      |> then(&{:ok, &1, result})
+                    end)
+
+                  "exists" ->
+                    query
+                    |> Ash.exists?()
+                    |> case do
+                      {:ok, value} ->
+                        value
+
+                      {:error, error} ->
+                        raise Ash.Error.to_error_class(error)
+                    end
+                    |> then(fn result ->
+                      result
+                      |> AshJsonApi.Serializer.serialize_value(Ash.Type.Boolean, [], domain)
+                      |> Jason.encode!()
+                      |> then(&{:ok, &1, result})
+                    end)
+
+                  %{"aggregate" => aggregate_kind} = aggregate ->
+                    if aggregate_kind not in ["min", "max", "sum", "avg", "count"] do
+                      raise "invalid aggregate function"
+                    end
+
+                    if !aggregate["field"] do
+                      raise "missing field argument"
+                    end
+
+                    field = Ash.Resource.Info.field(resource, aggregate["field"])
+
+                    if !field || !field.public? do
+                      raise "no such field"
+                    end
+
+                    aggregate_kind = String.to_existing_atom(aggregate_kind)
+
+                    aggregate =
+                      Ash.Query.Aggregate.new!(resource, :aggregate_result, aggregate_kind,
+                        field: field.name
+                      )
+
+                    query
+                    |> Ash.aggregate(aggregate)
+                    |> case do
+                      {:ok, value} ->
+                        value
+
+                      {:error, error} ->
+                        raise Ash.Error.to_error_class(error)
+                    end
+                    |> then(fn result ->
+                      result
+                      |> AshJsonApi.Serializer.serialize_value(
+                        aggregate.type,
+                        aggregate.constraints,
+                        domain
+                      )
+                      |> Jason.encode!()
+                      |> then(&{:ok, &1, result})
+                    end)
+                end
               end)
 
             :update ->
@@ -626,6 +710,42 @@ defmodule AshAi do
           |> Enum.into(%{})
           |> Jason.encode!()
           |> Jason.decode!()
+      },
+      result_type: %{
+        default: "run_query",
+        description: "The type of result to return",
+        oneOf: [
+          %{
+            description:
+              "Run the query returning all results, or return a count of results, or check if any results exist",
+            enum: [
+              "run_query",
+              "count",
+              "exists"
+            ]
+          },
+          %{
+            properties: %{
+              aggregate: %{
+                type: :string,
+                description: "The aggregate function to use",
+                enum: [:max, :min, :sum, :avg, :count]
+              },
+              field: %{
+                type: :string,
+                description: "The field to aggregate",
+                enum:
+                  Ash.Resource.Info.fields(resource, [
+                    :attributes,
+                    :aggregates,
+                    :calculations
+                  ])
+                  |> Enum.filter(& &1.public?)
+                  |> Enum.map(& &1.name)
+              }
+            }
+          }
+        ]
       },
       limit: %{
         type: :integer,
