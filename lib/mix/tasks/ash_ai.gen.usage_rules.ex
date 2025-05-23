@@ -187,13 +187,14 @@ if Code.ensure_loaded?(Igniter) do
         package_rules_content = File.read!(Path.join(path, "usage-rules.md"))
         
         status = get_package_status_in_file(name, package_rules_content, current_file_content)
-        Igniter.add_notice(acc, "#{name}: #{status}")
+        colored_status = colorize_status(status)
+        Igniter.add_notice(acc, "#{name}: #{colored_status}")
       end)
     end
 
     defp list_packages_without_comparison(igniter, packages_with_rules) do
       Enum.reduce(packages_with_rules, igniter, fn {name, _path}, acc ->
-        Igniter.add_notice(acc, "#{name}: has usage rules")
+        Igniter.add_notice(acc, "#{name}: #{IO.ANSI.green()}has usage rules#{IO.ANSI.reset()}")
       end)
     end
 
@@ -291,6 +292,10 @@ if Code.ensure_loaded?(Igniter) do
           "missing"
       end
     end
+
+    defp colorize_status("present"), do: "#{IO.ANSI.green()}present#{IO.ANSI.reset()}"
+    defp colorize_status("stale"), do: "#{IO.ANSI.yellow()}stale#{IO.ANSI.reset()}"
+    defp colorize_status("missing"), do: "#{IO.ANSI.red()}missing#{IO.ANSI.reset()}"
   end
 else
   defmodule Mix.Tasks.AshAi.Gen.UsageRules do
