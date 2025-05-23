@@ -86,17 +86,7 @@ if Code.ensure_loaded?(Igniter) do
 
         # If no packages are given and neither --list nor --all is set, add error
         Enum.empty?(provided_packages) && !all_option && !list_option ->
-          Igniter.add_issue(igniter, """
-          Usage:
-            mix ash_ai.gen.usage_rules <file> <packages...>
-              Combine specific packages' usage rules into the target file
-
-            mix ash_ai.gen.usage_rules <file> --all
-              Gather usage rules from all dependencies into the target file
-
-            mix ash_ai.gen.usage_rules [file] --list
-              List packages with usage rules (optionally check status against file)
-          """)
+          add_usage_error(igniter)
 
         # If --all is used without a file, add error
         all_option && is_nil(igniter.args.positional[:file]) ->
@@ -104,89 +94,121 @@ if Code.ensure_loaded?(Igniter) do
 
         # Handle --all option
         all_option ->
-          all_packages_with_rules =
-            all_deps
-            |> Enum.filter(fn {_name, path} ->
-              path
-              |> Path.join("usage-rules.md")
-              |> File.exists?()
-            end)
-
-          igniter
-          |> Igniter.add_notice("Found #{length(all_packages_with_rules)} dependencies with usage rules")
-          |> then(fn igniter ->
-            Enum.reduce(all_packages_with_rules, igniter, fn {name, _path}, acc ->
-              Igniter.add_notice(acc, "Including usage rules for: #{name}")
-            end)
-          end)
-          |> generate_usage_rules_file(all_packages_with_rules)
+          handle_all_option(igniter, all_deps)
 
         # Handle --list option
         list_option ->
-          packages_with_rules =
-            all_deps
-            |> Enum.filter(fn {_name, path} ->
-              path
-              |> Path.join("usage-rules.md")
-              |> File.exists?()
-            end)
-
-          if Enum.empty?(packages_with_rules) do
-            Igniter.add_notice(igniter, "No packages found with usage-rules.md files")
-          else
-            file_path = igniter.args.positional[:file]
-            
-            if file_path do
-              # Read current file contents if it exists
-              current_file_content = 
-                if Igniter.exists?(igniter, file_path) do
-                  case Rewrite.source(igniter.rewrite, file_path) do
-                    {:ok, source} -> Rewrite.Source.get(source, :content)
-                    {:error, _} -> 
-                      case File.read(file_path) do
-                        {:ok, content} -> content
-                        {:error, _} -> ""
-                      end
-                  end
-                else
-                  ""
-                end
-
-              Enum.reduce(packages_with_rules, igniter, fn {name, path}, acc ->
-                package_rules_content = File.read!(Path.join(path, "usage-rules.md"))
-                
-                status = get_package_status_in_file(name, package_rules_content, current_file_content)
-                Igniter.add_notice(acc, "#{name}: #{status}")
-              end)
-            else
-              # Just list packages with usage rules without file comparison
-              Enum.reduce(packages_with_rules, igniter, fn {name, _path}, acc ->
-                Igniter.add_notice(acc, "#{name}: has usage rules")
-              end)
-            end
-          end
+          handle_list_option(igniter, all_deps)
 
         # Handle specific packages
         true ->
-          packages =
-            all_deps
-            |> Enum.filter(fn {name, _path} ->
-              to_string(name) in provided_packages
-            end)
-            |> Enum.flat_map(fn {name, path} ->
-              path
-              |> Path.join("usage-rules.md")
-              |> File.exists?()
-              |> case do
-                true ->
-                  [{name, path}]
+          handle_specific_packages(igniter, all_deps, provided_packages)
+      end
+    end
 
-                false ->
-                  []
-              end
-            end)
+    defp add_usage_error(igniter) do
+      Igniter.add_issue(igniter, """
+      Usage:
+        mix ash_ai.gen.usage_rules <file> <packages...>
+          Combine specific packages' usage rules into the target file
 
-          generate_usage_rules_file(igniter, packages)
+        mix ash_ai.gen.usage_rules <file> --all
+          Gather usage rules from all dependencies into the target file
+
+        mix ash_ai.gen.usage_rules [file] --list
+          List packages with usage rules (optionally check status against file)
+      """)
+    end
+
+    defp handle_all_option(igniter, all_deps) do
+      all_packages_with_rules = get_packages_with_usage_rules(all_deps)
+
+      igniter
+      |> Igniter.add_notice("Found #{length(all_packages_with_rules)} dependencies with usage rules")
+      |> then(fn igniter ->
+        Enum.reduce(all_packages_with_rules, igniter, fn {name, _path}, acc ->
+          Igniter.add_notice(acc, "Including usage rules for: #{name}")
+        end)
+      end)
+      |> generate_usage_rules_file(all_packages_with_rules)
+    end
+
+    defp handle_list_option(igniter, all_deps) do
+      packages_with_rules = get_packages_with_usage_rules(all_deps)
+
+      if Enum.empty?(packages_with_rules) do
+        Igniter.add_notice(igniter, "No packages found with usage-rules.md files")
+      else
+        file_path = igniter.args.positional[:file]
+        
+        if file_path do
+          list_packages_with_file_comparison(igniter, packages_with_rules, file_path)
+        else
+          list_packages_without_comparison(igniter, packages_with_rules)
+        end
+      end
+    end
+
+    defp handle_specific_packages(igniter, all_deps, provided_packages) do
+      packages =
+        all_deps
+        |> Enum.filter(fn {name, _path} ->
+          to_string(name) in provided_packages
+        end)
+        |> Enum.flat_map(fn {name, path} ->
+          path
+          |> Path.join("usage-rules.md")
+          |> File.exists?()
+          |> case do
+            true ->
+              [{name, path}]
+
+            false ->
+              []
+          end
+        end)
+
+      generate_usage_rules_file(igniter, packages)
+    end
+
+    defp get_packages_with_usage_rules(all_deps) do
+      all_deps
+      |> Enum.filter(fn {_name, path} ->
+        path
+        |> Path.join("usage-rules.md")
+        |> File.exists?()
+      end)
+    end
+
+    defp list_packages_with_file_comparison(igniter, packages_with_rules, file_path) do
+      current_file_content = read_current_file_content(igniter, file_path)
+
+      Enum.reduce(packages_with_rules, igniter, fn {name, path}, acc ->
+        package_rules_content = File.read!(Path.join(path, "usage-rules.md"))
+        
+        status = get_package_status_in_file(name, package_rules_content, current_file_content)
+        Igniter.add_notice(acc, "#{name}: #{status}")
+      end)
+    end
+
+    defp list_packages_without_comparison(igniter, packages_with_rules) do
+      Enum.reduce(packages_with_rules, igniter, fn {name, _path}, acc ->
+        Igniter.add_notice(acc, "#{name}: has usage rules")
+      end)
+    end
+
+    defp read_current_file_content(igniter, file_path) do
+      if Igniter.exists?(igniter, file_path) do
+        case Rewrite.source(igniter.rewrite, file_path) do
+          {:ok, source} -> Rewrite.Source.get(source, :content)
+          {:error, _} -> 
+            case File.read(file_path) do
+              {:ok, content} -> content
+              {:error, _} -> ""
+            end
+        end
+      else
+        ""
       end
     end
 
