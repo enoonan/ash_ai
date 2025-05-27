@@ -351,8 +351,15 @@ read :search do
       {:ok, [search_vector]} ->
         Ash.Query.filter(
           query,
-          vector_cosine_distance(full_text_vector, ^vector) < 0.5
+          vector_cosine_distance(full_text_vector, ^search_vector) < 0.5
         )
+        |> Ash.Query.sort(
+          {calc(vector_cosine_distance(full_text_vector, ^search_vector),
+             type: :float
+           ), :asc}
+        )
+        |> Ash.Query.limit(10)
+
       {:error, error} ->
         {:error, error}
     end
