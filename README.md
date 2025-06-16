@@ -373,6 +373,27 @@ read :search do
 end
 ```
 
+## Building a Vector Index
+
+If your database stores more than ~10,000 vectors, you may see search performance degrade. You can ameliorate this by building an index on the vector column. Vector indices come at the expense of write speeds and higher resource usage. 
+
+The below example uses an `hnsw` index, which trades higher memory usage and vector build times for faster query speeds. An `ivfflat` index will have different settings, faster build times, lower memory usage, but slower query speeds. Do research and consider the tradeoffs for your use case. 
+
+```elixir
+  postgres do
+    table "embeddings"
+    repo MyApp.Repo
+
+    custom_statements do
+      statement :vector_idx do
+        up "CREATE INDEX vector_idx ON embeddings USING hnsw (vectorized_body vector_cosine_ops) WITH (m = 16, ef_construction = 64)"
+        down "DROP INDEX vector_idx;"
+      end
+    end
+  end
+```
+
+
 # Roadmap
 
 - more action types, like:
